@@ -5,14 +5,22 @@ import urllib.request
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from detectron2.engine import DefaultPredictor
-from detectron2.config import get_cfg
-from detectron2 import model_zoo
-from detectron2.data import MetadataCatalog
-from detectron2.utils.visualizer import Visualizer
 import tempfile
 import os
 from PIL import Image
+
+# Try to import Detectron2, fallback if not available
+try:
+    from detectron2.engine import DefaultPredictor
+    from detectron2.config import get_cfg
+    from detectron2 import model_zoo
+    from detectron2.data import MetadataCatalog
+    from detectron2.utils.visualizer import Visualizer
+    DETECTRON2_AVAILABLE = True
+except ImportError as e:
+    st.error(f"Detectron2 not available: {e}")
+    st.info("Running in YOLO-only mode. Only YOLOv8n will be available.")
+    DETECTRON2_AVAILABLE = False
 
 # Page configuration
 st.set_page_config(
@@ -33,11 +41,18 @@ def load_yolo_model():
 @st.cache_resource
 def load_detectron_model():
     """Load Mask R-CNN model with caching"""
-    cfg = get_cfg()
-    cfg.merge_from_file(model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"))
-    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = CONF_THRESHOLD
-    cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml")
-    return DefaultPredictor(cfg)
+    if not DETECTRON2_AVAILABLE:
+        return None
+    
+    try:
+        cfg = get_cfg()
+        cfg.merge_from_file(model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"))
+        cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = CONF_THRESHOLD
+        cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml")
+        return DefaultPredictor(cfg)
+    except Exception as e:
+        st.error(f"Error loading Detectron2 model: {e}")
+        return None
 
 def download_image(url):
     """Download image from URL and return local filename"""
@@ -121,23 +136,32 @@ def run_yolo_detection(image_path):
 
 def run_detectron_detection(image_path):
     """Run Mask R-CNN detection"""
+    if not DETECTRON2_AVAILABLE:
+        return {}, 0, None
+    
     predictor = load_detectron_model()
+    if predictor is None:
+        return {}, 0, None
     
-    img = cv2.imread(image_path)
-    start_time = time.time()
-    outputs = predictor(img)
-    inference_time = time.time() - start_time
-    
-    # Process results
-    data = process_detectron_results(outputs)
-    
-    # Create visualization
-    v = Visualizer(img[:, :, ::-1], MetadataCatalog.get("coco_2017_train"), scale=1.2)
-    instances = outputs["instances"]
-    out = v.draw_instance_predictions(instances.to("cpu"))
-    annotated_img = out.get_image()
-    
-    return data, inference_time, annotated_img
+    try:
+        img = cv2.imread(image_path)
+        start_time = time.time()
+        outputs = predictor(img)
+        inference_time = time.time() - start_time
+        
+        # Process results
+        data = process_detectron_results(outputs)
+        
+        # Create visualization
+        v = Visualizer(img[:, :, ::-1], MetadataCatalog.get("coco_2017_train"), scale=1.2)
+        instances = outputs["instances"]
+        out = v.draw_instance_predictions(instances.to("cpu"))
+        annotated_img = out.get_image()
+        
+        return data, inference_time, annotated_img
+    except Exception as e:
+        st.error(f"Error in Detectron2 detection: {e}")
+        return {}, 0, None
 
 def format_results_table(data, model_name, inference_time):
     """Format detection results as a table"""
@@ -161,7 +185,12 @@ def format_results_table(data, model_name, inference_time):
 
 def main():
     st.title("🔍 Object Detection Comparison")
-    st.markdown("**YOLOv8n vs Mask R-CNN**")
+    
+    if DETECTRON2_AVAILABLE:
+        st.markdown("**YOLOv8n vs Mask R-CNN**")
+    else:
+        st.markdown("**YOLOv8n Object Detection** (Detectron2 unavailable)")
+        st.warning("⚠️ Detectron2 is not available. Only YOLOv8n detection will work.")
     
     # Sidebar
     st.sidebar.header("Settings")
@@ -237,34 +266,92 @@ def main():
         if st.button("🚀 Run Object Detection", type="primary"):
             with st.spinner("Running object detection..."):
                 try:
-                    # Run both models
+                    # Run YOLO model
                     yolo_data, yolo_time, yolo_img = run_yolo_detection(image_path)
-                    detectron_data, detectron_time, detectron_img = run_detectron_detection(image_path)
+                    
+                    # Run Detectron2 model if available
+                    if DETECTRON2_AVAILABLE:
+                        detectron_data, detectron_time, detectron_img = run_detectron_detection(image_path)
+                    else:
+                        detectron_data, detectron_time, detectron_img = {}, 0, None
                     
                     # Display results
                     st.header("Detection Results")
                     
-                    # Performance comparison
-                    col1, col2 = st.columns(2)
+                    if DETECTRON2_AVAILABLE and detectron_img is not None:
+                        # Performance comparison
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.metric(
+                                "YOLOv8n Speed", 
+                                f"{yolo_time:.3f}s",
+                                delta=f"{yolo_time - detectron_time:.3f}s" if yolo_time < detectron_time else None
+                            )
+                        
+                        with col2:
+                            st.metric(
+                                "Mask R-CNN Speed", 
+                                f"{detectron_time:.3f}s",
+                                delta=f"{detectron_time - yolo_time:.3f}s" if detectron_time < yolo_time else None
+                            )
+                        
+                        # Detection results side by side
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.subheader("YOLOv8n Results")
+                            st.image(yolo_img, use_column_width=True)
+                            
+                            yolo_text, yolo_table = format_results_table(yolo_data, "YOLOv8n", yolo_time)
+                            st.markdown(yolo_text)
+                            if yolo_table:
+                                st.dataframe(yolo_table, use_container_width=True)
+                        
+                        with col2:
+                            st.subheader("Mask R-CNN Results")
+                            st.image(detectron_img, use_column_width=True)
+                            
+                            detectron_text, detectron_table = format_results_table(detectron_data, "Mask R-CNN", detectron_time)
+                            st.markdown(detectron_text)
+                            if detectron_table:
+                                st.dataframe(detectron_table, use_container_width=True)
+                        
+                        # Summary comparison
+                        st.header("Summary Comparison")
+                        
+                        yolo_total = sum(stats['count'] for stats in yolo_data.values())
+                        detectron_total = sum(stats['count'] for stats in detectron_data.values())
+                        
+                        summary_data = {
+                            "Model": ["YOLOv8n", "Mask R-CNN"],
+                            "Inference Time (s)": [f"{yolo_time:.3f}", f"{detectron_time:.3f}"],
+                            "Total Objects": [yolo_total, detectron_total],
+                            "Speed Rank": ["🥇" if yolo_time < detectron_time else "🥈", 
+                                         "🥇" if detectron_time < yolo_time else "🥈"],
+                            "Detection Rank": ["🥇" if yolo_total > detectron_total else "🥈", 
+                                             "🥇" if detectron_total > yolo_total else "🥈"]
+                        }
+                        
+                        st.dataframe(summary_data, use_container_width=True)
+                        
+                        # Recommendations
+                        st.header("Recommendations")
+                        
+                        if yolo_time < detectron_time:
+                            st.success("🚀 **YOLOv8n** is faster - better for real-time applications")
+                        else:
+                            st.info("🎯 **Mask R-CNN** provides more detailed analysis")
+                        
+                        if yolo_total > detectron_total:
+                            st.info("🔍 **YOLOv8n** detected more objects")
+                        elif detectron_total > yolo_total:
+                            st.info("🔍 **Mask R-CNN** detected more objects")
+                        else:
+                            st.info("🤝 Both models detected the same number of objects")
                     
-                    with col1:
-                        st.metric(
-                            "YOLOv8n Speed", 
-                            f"{yolo_time:.3f}s",
-                            delta=f"{yolo_time - detectron_time:.3f}s" if yolo_time < detectron_time else None
-                        )
-                    
-                    with col2:
-                        st.metric(
-                            "Mask R-CNN Speed", 
-                            f"{detectron_time:.3f}s",
-                            delta=f"{detectron_time - yolo_time:.3f}s" if detectron_time < yolo_time else None
-                        )
-                    
-                    # Detection results side by side
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
+                    else:
+                        # YOLO-only mode
                         st.subheader("YOLOv8n Results")
                         st.image(yolo_img, use_column_width=True)
                         
@@ -272,48 +359,8 @@ def main():
                         st.markdown(yolo_text)
                         if yolo_table:
                             st.dataframe(yolo_table, use_container_width=True)
-                    
-                    with col2:
-                        st.subheader("Mask R-CNN Results")
-                        st.image(detectron_img, use_column_width=True)
                         
-                        detectron_text, detectron_table = format_results_table(detectron_data, "Mask R-CNN", detectron_time)
-                        st.markdown(detectron_text)
-                        if detectron_table:
-                            st.dataframe(detectron_table, use_container_width=True)
-                    
-                    # Summary comparison
-                    st.header("Summary Comparison")
-                    
-                    yolo_total = sum(stats['count'] for stats in yolo_data.values())
-                    detectron_total = sum(stats['count'] for stats in detectron_data.values())
-                    
-                    summary_data = {
-                        "Model": ["YOLOv8n", "Mask R-CNN"],
-                        "Inference Time (s)": [f"{yolo_time:.3f}", f"{detectron_time:.3f}"],
-                        "Total Objects": [yolo_total, detectron_total],
-                        "Speed Rank": ["🥇" if yolo_time < detectron_time else "🥈", 
-                                     "🥇" if detectron_time < yolo_time else "🥈"],
-                        "Detection Rank": ["🥇" if yolo_total > detectron_total else "🥈", 
-                                         "🥇" if detectron_total > yolo_total else "🥈"]
-                    }
-                    
-                    st.dataframe(summary_data, use_container_width=True)
-                    
-                    # Recommendations
-                    st.header("Recommendations")
-                    
-                    if yolo_time < detectron_time:
-                        st.success("🚀 **YOLOv8n** is faster - better for real-time applications")
-                    else:
-                        st.info("🎯 **Mask R-CNN** provides more detailed analysis")
-                    
-                    if yolo_total > detectron_total:
-                        st.info("🔍 **YOLOv8n** detected more objects")
-                    elif detectron_total > yolo_total:
-                        st.info("🔍 **Mask R-CNN** detected more objects")
-                    else:
-                        st.info("🤝 Both models detected the same number of objects")
+                        st.success("🚀 **YOLOv8n** detection completed successfully!")
                 
                 except Exception as e:
                     st.error(f"Error during detection: {str(e)}")
