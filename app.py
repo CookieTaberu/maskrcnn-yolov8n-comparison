@@ -11,6 +11,14 @@ from ultralytics import YOLO
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from io import BytesIO
+import os
+import warnings
+
+# Suppress warnings
+warnings.filterwarnings('ignore')
+
+# Set YOLO config directory to avoid permission issues
+os.environ.setdefault('YOLO_CONFIG_DIR', '/tmp')
 
 # Set page config
 st.set_page_config(
@@ -25,11 +33,15 @@ st.set_page_config(
 def load_models():
     """Load YOLOv8n and Mask R-CNN models"""
     try:
+        # Suppress YOLO verbose output
+        import logging
+        logging.getLogger('ultralytics').setLevel(logging.ERROR)
+        
         # Load YOLOv8n
         yolo_model = YOLO('yolov8n.pt')
         
-        # Load Mask R-CNN
-        maskrcnn_model = detection.maskrcnn_resnet50_fpn(pretrained=True)
+        # Load Mask R-CNN with updated syntax
+        maskrcnn_model = detection.maskrcnn_resnet50_fpn(weights='DEFAULT')
         maskrcnn_model.eval()
         
         return yolo_model, maskrcnn_model
@@ -238,7 +250,7 @@ def main():
         image = Image.open(uploaded_file).convert('RGB')
         
         st.subheader("📸 Original Image")
-        st.image(image, caption="Uploaded Image", use_column_width=True)
+        st.image(image, caption="Uploaded Image", use_container_width=True)
         
         # Run detections
         with st.spinner("Running object detection..."):
@@ -249,7 +261,7 @@ def main():
                 yolo_detections, yolo_annotated, yolo_time = run_yolo_detection(
                     yolo_model, image, confidence_threshold
                 )
-                st.image(yolo_annotated, caption=f"YOLOv8n Detection (Time: {yolo_time:.4f}s)", use_column_width=True)
+                st.image(yolo_annotated, caption=f"YOLOv8n Detection (Time: {yolo_time:.4f}s)", use_container_width=True)
                 st.write(f"**Detections found:** {len(yolo_detections)}")
             
             with col2:
@@ -257,7 +269,7 @@ def main():
                 maskrcnn_detections, maskrcnn_annotated, maskrcnn_time = run_maskrcnn_detection(
                     maskrcnn_model, image, confidence_threshold
                 )
-                st.image(maskrcnn_annotated, caption=f"Mask R-CNN Detection (Time: {maskrcnn_time:.4f}s)", use_column_width=True)
+                st.image(maskrcnn_annotated, caption=f"Mask R-CNN Detection (Time: {maskrcnn_time:.4f}s)", use_container_width=True)
                 st.write(f"**Detections found:** {len(maskrcnn_detections)}")
         
         # Create and display comparison tables
