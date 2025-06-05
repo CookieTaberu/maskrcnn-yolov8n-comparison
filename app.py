@@ -1,5 +1,4 @@
 import streamlit as st
-import cv2
 import numpy as np
 import time
 import pandas as pd
@@ -15,6 +14,20 @@ import os
 import warnings
 import tempfile
 import sys
+
+# Set environment variables to avoid GUI issues
+os.environ['OPENCV_VIDEOIO_PRIORITY_MSMF'] = '0'
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+
+# Import cv2 with error handling
+try:
+    import cv2
+    # Set OpenCV to headless mode
+    cv2.setUseOptimized(True)
+except ImportError as e:
+    st.error(f"OpenCV import error: {e}")
+    st.info("Please install opencv-python-headless instead of opencv-python")
+    st.stop()
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
