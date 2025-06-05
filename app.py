@@ -238,6 +238,7 @@ def create_comparison_table(yolo_detections, maskrcnn_detections, yolo_time, mas
     yolo_avg_conf = np.mean([d['confidence'] for d in yolo_detections]) if yolo_detections else 0
     maskrcnn_avg_conf = np.mean([d['confidence'] for d in maskrcnn_detections]) if maskrcnn_detections else 0
     
+    # Modify this section to keep numerical values as numbers
     stats_data = {
         'Metric': [
             'Total Detections',
@@ -248,17 +249,17 @@ def create_comparison_table(yolo_detections, maskrcnn_detections, yolo_time, mas
         ],
         'YOLOv8n': [
             len(yolo_detections),
-            f"{yolo_time:.4f}",
-            f"{yolo_avg_conf:.3f}" if yolo_detections else "N/A",
+            yolo_time, # Keep as float
+            yolo_avg_conf, # Keep as float
             len(yolo_classes),
-            f"{1/yolo_time:.1f}" if yolo_time > 0 else "N/A"
+            1/yolo_time if yolo_time > 0 else 0 # Keep as float
         ],
         'Mask R-CNN': [
             len(maskrcnn_detections),
-            f"{maskrcnn_time:.4f}",
-            f"{maskrcnn_avg_conf:.3f}" if maskrcnn_detections else "N/A",
+            maskrcnn_time, # Keep as float
+            maskrcnn_avg_conf, # Keep as float
             len(maskrcnn_classes),
-            f"{1/maskrcnn_time:.1f}" if maskrcnn_time > 0 else "N/A"
+            1/maskrcnn_time if maskrcnn_time > 0 else 0 # Keep as float
         ]
     }
     
@@ -430,7 +431,20 @@ def main():
         
         # Display overall statistics
         st.markdown("### Overall Statistics")
-        st.dataframe(stats_df, use_container_width=True)
+        # Format the 'Inference Time (s)', 'Average Confidence', and 'Speed (FPS)' columns for display
+        # You can apply formatting directly when displaying the DataFrame if needed,
+        # or convert to string only for display if the DataFrame is used for other numerical operations later.
+        display_stats_df = stats_df.copy()
+        display_stats_df.loc[display_stats_df['Metric'] == 'Inference Time (s)', 'YOLOv8n'] = display_stats_df.loc[display_stats_df['Metric'] == 'Inference Time (s)', 'YOLOv8n'].apply(lambda x: f"{x:.4f}" if isinstance(x, (int, float)) else x)
+        display_stats_df.loc[display_stats_df['Metric'] == 'Inference Time (s)', 'Mask R-CNN'] = display_stats_df.loc[display_stats_df['Metric'] == 'Inference Time (s)', 'Mask R-CNN'].apply(lambda x: f"{x:.4f}" if isinstance(x, (int, float)) else x)
+
+        display_stats_df.loc[display_stats_df['Metric'] == 'Average Confidence', 'YOLOv8n'] = display_stats_df.loc[display_stats_df['Metric'] == 'Average Confidence', 'YOLOv8n'].apply(lambda x: f"{x:.3f}" if isinstance(x, (int, float)) else "N/A")
+        display_stats_df.loc[display_stats_df['Metric'] == 'Average Confidence', 'Mask R-CNN'] = display_stats_df.loc[display_stats_df['Metric'] == 'Average Confidence', 'Mask R-CNN'].apply(lambda x: f"{x:.3f}" if isinstance(x, (int, float)) else "N/A")
+
+        display_stats_df.loc[display_stats_df['Metric'] == 'Speed (FPS)', 'YOLOv8n'] = display_stats_df.loc[display_stats_df['Metric'] == 'Speed (FPS)', 'YOLOv8n'].apply(lambda x: f"{x:.1f}" if isinstance(x, (int, float)) and x > 0 else "N/A")
+        display_stats_df.loc[display_stats_df['Metric'] == 'Speed (FPS)', 'Mask R-CNN'] = display_stats_df.loc[display_stats_df['Metric'] == 'Speed (FPS)', 'Mask R-CNN'].apply(lambda x: f"{x:.1f}" if isinstance(x, (int, float)) and x > 0 else "N/A")
+
+        st.dataframe(display_stats_df, use_container_width=True)
         
         # Display class-wise comparison
         if not comparison_df.empty:
