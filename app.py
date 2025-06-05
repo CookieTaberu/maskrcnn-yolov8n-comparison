@@ -37,17 +37,28 @@ os.environ.setdefault('YOLO_CONFIG_DIR', tempfile.gettempdir())
 
 # Set page config
 st.set_page_config(
-    page_title="YOLOv8n vs Faster R-CNN Comparison",
+    page_title="YOLOv8n vs Mask R-CNN Comparison",
     page_icon="🔍",
     layout="wide"
 )
 
-# COCO class names are no longer a global constant.
-# They will be fetched from the YOLO model or defined internally for Faster R-CNN.
+# COCO class names for better labeling
+COCO_CLASSES = [
+    'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
+    'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
+    'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
+    'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
+    'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
+    'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+    'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
+    'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
+    'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
+    'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+]
 
 @st.cache_resource
 def load_models():
-    """Load YOLOv8n and Faster R-CNN models with better error handling and fetch class names."""
+    """Load YOLOv8n and Mask R-CNN models with better error handling"""
     try:
         # Suppress YOLO verbose output
         import logging
@@ -56,62 +67,41 @@ def load_models():
         # Load YOLOv8n
         with st.spinner("Loading YOLOv8n model..."):
             yolo_model = YOLO('yolov8n.pt')
-            yolo_class_names = yolo_model.names # Get class names directly from YOLO model
         
-        # Load Faster R-CNN with proper error handling
-        with st.spinner("Loading Faster R-CNN model..."):
+        # Load Mask R-CNN with proper error handling
+        with st.spinner("Loading Mask R-CNN model..."):
             try:
-                fasterrcnn_model = detection.fasterrcnn_resnet50_fpn(weights='COCO_V1') 
+                maskrcnn_model = detection.maskrcnn_resnet50_fpn(weights='COCO_V1')
             except:
-                fasterrcnn_model = detection.fasterrcnn_resnet50_fpn(pretrained=True)
+                # Fallback to older syntax
+                maskrcnn_model = detection.maskrcnn_resnet50_fpn(pretrained=True)
             
-            fasterrcnn_model.eval()
+            maskrcnn_model.eval()
             
             # Move to appropriate device
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            fasterrcnn_model = fasterrcnn_model.to(device)
-
-            # Define COCO class names specifically for Faster R-CNN here, as it's trained on COCO.
-            # This list is local to load_models or passed out, not a global constant.
-            # This ensures we have human-readable labels for torchvision models.
-            fasterrcnn_class_names = [
-                '__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-                'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'N/A', 'stop sign',
-                'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
-                'elephant', 'bear', 'zebra', 'giraffe', 'N/A', 'backpack', 'umbrella', 'N/A', 'N/A',
-                'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball',
-                'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-                'bottle', 'N/A', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
-                'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog',
-                'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed',
-                'N/A', 'dining table', 'N/A', 'N/A', 'toilet', 'N/A', 'tv', 'laptop',
-                'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
-                'refrigerator', 'N/A', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
-                'hair drier', 'toothbrush'
-            ]
-            # Note: COCO has 91 classes, but some IDs are skipped. 'N/A' for skipped IDs.
-
-        return yolo_model, fasterrcnn_model, device, yolo_class_names, fasterrcnn_class_names
+            maskrcnn_model = maskrcnn_model.to(device)
+        
+        return yolo_model, maskrcnn_model, device
     except Exception as e:
         st.error(f"Error loading models: {str(e)}")
-        return None, None, None, None, None
+        return None, None, None
 
-# This helper function will now take the specific model's class names
-def get_class_name(class_id, class_names_list):
-    """Get class name from class ID using the provided list of class names."""
-    if 0 <= class_id < len(class_names_list):
-        return class_names_list[class_id]
+def get_class_name(class_id):
+    """Get class name from COCO class ID"""
+    if 0 <= class_id < len(COCO_CLASSES):
+        return COCO_CLASSES[class_id]
     return f"class_{class_id}"
 
-def preprocess_image_fasterrcnn(image, device):
-    """Preprocess image for Faster R-CNN"""
+def preprocess_image_maskrcnn(image, device):
+    """Preprocess image for Mask R-CNN"""
     transform = transforms.Compose([
         transforms.ToTensor()
     ])
     tensor = transform(image).unsqueeze(0)
     return tensor.to(device)
 
-def run_yolo_detection(model, image, confidence_threshold=0.5, class_names=None): # Added class_names arg
+def run_yolo_detection(model, image, confidence_threshold=0.5):
     """Run YOLOv8n detection with improved error handling"""
     try:
         start_time = time.time()
@@ -137,8 +127,8 @@ def run_yolo_detection(model, image, confidence_threshold=0.5, class_names=None)
                     confidence = box.conf[0].cpu().numpy()
                     class_id = int(box.cls[0].cpu().numpy())
                     
-                    # Get class name using the provided list
-                    class_name = get_class_name(class_id, class_names) if class_names else f"class_{class_id}"
+                    # Get class name
+                    class_name = get_class_name(class_id)
                     
                     detections.append({
                         'bbox': [int(x1), int(y1), int(x2), int(y2)],
@@ -161,13 +151,13 @@ def run_yolo_detection(model, image, confidence_threshold=0.5, class_names=None)
         st.error(f"Error in YOLO detection: {str(e)}")
         return [], np.array(image), 0.0
 
-def run_fasterrcnn_detection(model, image, device, confidence_threshold=0.5, class_names=None): # Added class_names arg
-    """Run Faster R-CNN detection with improved error handling"""
+def run_maskrcnn_detection(model, image, device, confidence_threshold=0.5):
+    """Run Mask R-CNN detection with improved error handling"""
     try:
         start_time = time.time()
         
         # Preprocess image
-        input_tensor = preprocess_image_fasterrcnn(image, device)
+        input_tensor = preprocess_image_maskrcnn(image, device)
         
         # Run inference
         with torch.no_grad():
@@ -191,18 +181,14 @@ def run_fasterrcnn_detection(model, image, device, confidence_threshold=0.5, cla
         labels = labels[valid_indices]
         
         for box, score, label in zip(boxes, scores, labels):
-            # For torchvision models trained on COCO, labels are 1-indexed.
-            # Class ID 0 is usually background. So, label-1 gives the index for a 0-indexed list.
-            class_id_adjusted = int(label) 
-            
-            # Get class name using the provided list
-            class_name = get_class_name(class_id_adjusted, class_names) if class_names else f"class_{class_id_adjusted}"
+            x1, y1, x2, y2 = box
+            class_name = get_class_name(label - 1)  # COCO labels are 1-indexed
             
             detections.append({
                 'bbox': [int(x1), int(y1), int(x2), int(y2)],
                 'confidence': float(score),
                 'class': class_name,
-                'class_id': int(label) # Keep original label for potential debugging if needed
+                'class_id': int(label - 1)
             })
             
             # Draw bounding box
@@ -213,45 +199,46 @@ def run_fasterrcnn_detection(model, image, device, confidence_threshold=0.5, cla
         return detections, annotated_image, inference_time
     
     except Exception as e:
-        st.error(f"Error in Faster R-CNN detection: {str(e)}")
+        st.error(f"Error in Mask R-CNN detection: {str(e)}")
         return [], np.array(image), 0.0
 
-def create_comparison_table(yolo_detections, fasterrcnn_detections, yolo_time, fasterrcnn_time):
+def create_comparison_table(yolo_detections, maskrcnn_detections, yolo_time, maskrcnn_time):
     """Create comparison table between the two models"""
     
     # Count detections by class for both models
     yolo_classes = {}
-    fasterrcnn_classes = {}
+    maskrcnn_classes = {}
     
     for det in yolo_detections:
         class_name = det['class']
         yolo_classes[class_name] = yolo_classes.get(class_name, 0) + 1
     
-    for det in fasterrcnn_detections:
+    for det in maskrcnn_detections:
         class_name = det['class']
-        fasterrcnn_classes[class_name] = fasterrcnn_classes.get(class_name, 0) + 1
+        maskrcnn_classes[class_name] = maskrcnn_classes.get(class_name, 0) + 1
     
     # Get all unique classes
-    all_classes = set(list(yolo_classes.keys()) + list(fasterrcnn_classes.keys()))
+    all_classes = set(list(yolo_classes.keys()) + list(maskrcnn_classes.keys()))
     
     # Create comparison data
     comparison_data = []
     for class_name in sorted(all_classes):
         yolo_count = yolo_classes.get(class_name, 0)
-        fasterrcnn_count = fasterrcnn_classes.get(class_name, 0)
+        maskrcnn_count = maskrcnn_classes.get(class_name, 0)
         comparison_data.append({
             'Class': class_name,
             'YOLOv8n Count': yolo_count,
-            'Faster R-CNN Count': fasterrcnn_count,
-            'Difference': yolo_count - fasterrcnn_count
+            'Mask R-CNN Count': maskrcnn_count,
+            'Difference': yolo_count - maskrcnn_count
         })
     
     comparison_df = pd.DataFrame(comparison_data) if comparison_data else pd.DataFrame()
     
     # Overall statistics
     yolo_avg_conf = np.mean([d['confidence'] for d in yolo_detections]) if yolo_detections else 0
-    fasterrcnn_avg_conf = np.mean([d['confidence'] for d in fasterrcnn_detections]) if fasterrcnn_detections else 0
+    maskrcnn_avg_conf = np.mean([d['confidence'] for d in maskrcnn_detections]) if maskrcnn_detections else 0
     
+    # Modify this section to keep numerical values as numbers
     stats_data = {
         'Metric': [
             'Total Detections',
@@ -262,17 +249,17 @@ def create_comparison_table(yolo_detections, fasterrcnn_detections, yolo_time, f
         ],
         'YOLOv8n': [
             len(yolo_detections),
-            yolo_time, 
-            yolo_avg_conf, 
+            yolo_time, # Keep as float
+            yolo_avg_conf, # Keep as float
             len(yolo_classes),
-            1/yolo_time if yolo_time > 0 else 0
+            1/yolo_time if yolo_time > 0 else 0 # Keep as float
         ],
-        'Faster R-CNN': [
-            len(fasterrcnn_detections),
-            fasterrcnn_time,
-            fasterrcnn_avg_conf,
-            len(fasterrcnn_classes),
-            1/fasterrcnn_time if fasterrcnn_time > 0 else 0
+        'Mask R-CNN': [
+            len(maskrcnn_detections),
+            maskrcnn_time, # Keep as float
+            maskrcnn_avg_conf, # Keep as float
+            len(maskrcnn_classes),
+            1/maskrcnn_time if maskrcnn_time > 0 else 0 # Keep as float
         ]
     }
     
@@ -280,7 +267,7 @@ def create_comparison_table(yolo_detections, fasterrcnn_detections, yolo_time, f
     
     return comparison_df, stats_df
 
-def create_visualizations(comparison_df, yolo_time, fasterrcnn_time):
+def create_visualizations(comparison_df, yolo_time, maskrcnn_time):
     """Create comparison visualizations"""
     if comparison_df.empty:
         return None
@@ -290,13 +277,13 @@ def create_visualizations(comparison_df, yolo_time, fasterrcnn_time):
     # Detection count comparison
     classes = comparison_df['Class']
     yolo_counts = comparison_df['YOLOv8n Count']
-    fasterrcnn_counts = comparison_df['Faster R-CNN Count']
+    maskrcnn_counts = comparison_df['Mask R-CNN Count']
     
     x = np.arange(len(classes))
     width = 0.35
     
     ax1.bar(x - width/2, yolo_counts, width, label='YOLOv8n', color='green', alpha=0.7)
-    ax1.bar(x + width/2, fasterrcnn_counts, width, label='Faster R-CNN', color='red', alpha=0.7)
+    ax1.bar(x + width/2, maskrcnn_counts, width, label='Mask R-CNN', color='red', alpha=0.7)
     ax1.set_xlabel('Object Classes')
     ax1.set_ylabel('Detection Count')
     ax1.set_title('Detection Count Comparison')
@@ -306,8 +293,8 @@ def create_visualizations(comparison_df, yolo_time, fasterrcnn_time):
     ax1.grid(True, alpha=0.3)
     
     # Inference time comparison
-    models = ['YOLOv8n', 'Faster R-CNN']
-    times = [yolo_time, fasterrcnn_time]
+    models = ['YOLOv8n', 'Mask R-CNN']
+    times = [yolo_time, maskrcnn_time]
     colors = ['green', 'red']
     
     bars = ax2.bar(models, times, color=colors, alpha=0.7)
@@ -337,7 +324,7 @@ def create_visualizations(comparison_df, yolo_time, fasterrcnn_time):
     
     ax4.bar(classes, differences, color=colors_diff, alpha=0.7)
     ax4.set_xlabel('Object Classes')
-    ax4.set_ylabel('Detection Difference (YOLO - Faster R-CNN)')
+    ax4.set_ylabel('Detection Difference (YOLO - Mask R-CNN)')
     ax4.set_title('Detection Count Difference')
     ax4.set_xticklabels(classes, rotation=45, ha='right')
     ax4.grid(True, alpha=0.3)
@@ -347,14 +334,14 @@ def create_visualizations(comparison_df, yolo_time, fasterrcnn_time):
     return fig
 
 def main():
-    st.title("🔍 YOLOv8n vs Faster R-CNN Object Detection Comparison")
-    st.markdown("Upload an image to compare object detection performance between YOLOv8n and Faster R-CNN models.")
+    st.title("🔍 YOLOv8n vs Mask R-CNN Object Detection Comparison")
+    st.markdown("Upload an image to compare object detection performance between YOLOv8n and Mask R-CNN models.")
     
-    # Load models and class names
+    # Load models
     with st.spinner("Loading models... This may take a moment on first run."):
-        yolo_model, fasterrcnn_model, device, yolo_class_names, fasterrcnn_class_names = load_models()
+        yolo_model, maskrcnn_model, device = load_models()
     
-    if yolo_model is None or fasterrcnn_model is None:
+    if yolo_model is None or maskrcnn_model is None:
         st.error("Failed to load models. Please check your installation.")
         st.markdown("""
         **Installation Requirements:**
@@ -418,7 +405,7 @@ def main():
             with col1:
                 st.subheader("🟢 YOLOv8n Results")
                 yolo_detections, yolo_annotated, yolo_time = run_yolo_detection(
-                    yolo_model, image, confidence_threshold, class_names=yolo_class_names # Pass class names
+                    yolo_model, image, confidence_threshold
                 )
                 st.image(yolo_annotated, caption=f"YOLOv8n Detection", use_container_width=True)
                 st.metric("Detections", len(yolo_detections))
@@ -426,33 +413,37 @@ def main():
                 st.metric("Speed", f"{1/yolo_time:.1f} FPS" if yolo_time > 0 else "N/A")
             
             with col2:
-                st.subheader("🔴 Faster R-CNN Results")
-                fasterrcnn_detections, fasterrcnn_annotated, fasterrcnn_time = run_fasterrcnn_detection(
-                    fasterrcnn_model, image, device, confidence_threshold, class_names=fasterrcnn_class_names # Pass class names
+                st.subheader("🔴 Mask R-CNN Results")
+                maskrcnn_detections, maskrcnn_annotated, maskrcnn_time = run_maskrcnn_detection(
+                    maskrcnn_model, image, device, confidence_threshold
                 )
-                st.image(fasterrcnn_annotated, caption=f"Faster R-CNN Detection", use_container_width=True)
-                st.metric("Detections", len(fasterrcnn_detections))
-                st.metric("Inference Time", f"{fasterrcnn_time:.4f}s")
-                st.metric("Speed", f"{1/fasterrcnn_time:.1f} FPS" if fasterrcnn_time > 0 else "N/A")
+                st.image(maskrcnn_annotated, caption=f"Mask R-CNN Detection", use_container_width=True)
+                st.metric("Detections", len(maskrcnn_detections))
+                st.metric("Inference Time", f"{maskrcnn_time:.4f}s")
+                st.metric("Speed", f"{1/maskrcnn_time:.1f} FPS" if maskrcnn_time > 0 else "N/A")
         
         # Create and display comparison tables
         st.subheader("📊 Performance Comparison")
         
         comparison_df, stats_df = create_comparison_table(
-            yolo_detections, fasterrcnn_detections, yolo_time, fasterrcnn_time
+            yolo_detections, maskrcnn_detections, yolo_time, maskrcnn_time
         )
         
         # Display overall statistics
         st.markdown("### Overall Statistics")
+        # Format the 'Inference Time (s)', 'Average Confidence', and 'Speed (FPS)' columns for display
+        # You can apply formatting directly when displaying the DataFrame if needed,
+        # or convert to string only for display if the DataFrame is used for other numerical operations later.
         display_stats_df = stats_df.copy()
         display_stats_df.loc[display_stats_df['Metric'] == 'Inference Time (s)', 'YOLOv8n'] = display_stats_df.loc[display_stats_df['Metric'] == 'Inference Time (s)', 'YOLOv8n'].apply(lambda x: f"{x:.4f}" if isinstance(x, (int, float)) else x)
-        display_stats_df.loc[display_stats_df['Metric'] == 'Inference Time (s)', 'Faster R-CNN'] = display_stats_df.loc[display_stats_df['Metric'] == 'Inference Time (s)', 'Faster R-CNN'].apply(lambda x: f"{x:.4f}" if isinstance(x, (int, float)) else x)
+        display_stats_df.loc[display_stats_df['Metric'] == 'Inference Time (s)', 'Mask R-CNN'] = display_stats_df.loc[display_stats_df['Metric'] == 'Inference Time (s)', 'Mask R-CNN'].apply(lambda x: f"{x:.4f}" if isinstance(x, (int, float)) else x)
 
         display_stats_df.loc[display_stats_df['Metric'] == 'Average Confidence', 'YOLOv8n'] = display_stats_df.loc[display_stats_df['Metric'] == 'Average Confidence', 'YOLOv8n'].apply(lambda x: f"{x:.3f}" if isinstance(x, (int, float)) else "N/A")
-        display_stats_df.loc[display_stats_df['Metric'] == 'Average Confidence', 'Faster R-CNN'] = display_stats_df.loc[display_stats_df['Metric'] == 'Average Confidence', 'Faster R-CNN'].apply(lambda x: f"{x:.3f}" if isinstance(x, (int, float)) else "N/A")
+        display_stats_df.loc[display_stats_df['Metric'] == 'Average Confidence', 'Mask R-CNN'] = display_stats_df.loc[display_stats_df['Metric'] == 'Average Confidence', 'Mask R-CNN'].apply(lambda x: f"{x:.3f}" if isinstance(x, (int, float)) else "N/A")
 
         display_stats_df.loc[display_stats_df['Metric'] == 'Speed (FPS)', 'YOLOv8n'] = display_stats_df.loc[display_stats_df['Metric'] == 'Speed (FPS)', 'YOLOv8n'].apply(lambda x: f"{x:.1f}" if isinstance(x, (int, float)) and x > 0 else "N/A")
-        display_stats_df.loc[display_stats_df['Metric'] == 'Speed (FPS)', 'Faster R-CNN'] = display_stats_df.loc[display_stats_df['Metric'] == 'Speed (FPS)', 'Faster R-CNN'].apply(lambda x: f"{x:.1f}" if isinstance(x, (int, float)) and x > 0 else "N/A")
+        display_stats_df.loc[display_stats_df['Metric'] == 'Speed (FPS)', 'Mask R-CNN'] = display_stats_df.loc[display_stats_df['Metric'] == 'Speed (FPS)', 'Mask R-CNN'].apply(lambda x: f"{x:.1f}" if isinstance(x, (int, float)) and x > 0 else "N/A")
+
         st.dataframe(display_stats_df, use_container_width=True)
         
         # Display class-wise comparison
@@ -461,7 +452,7 @@ def main():
             st.dataframe(comparison_df, use_container_width=True)
             
             # Visualization
-            fig = create_visualizations(comparison_df, yolo_time, fasterrcnn_time)
+            fig = create_visualizations(comparison_df, yolo_time, maskrcnn_time)
             if fig:
                 st.pyplot(fig)
         else:
@@ -470,34 +461,34 @@ def main():
         # Performance insights
         st.subheader("🎯 Performance Insights")
         
-        if yolo_time > 0 and fasterrcnn_time > 0:
-            speed_ratio = fasterrcnn_time / yolo_time
+        if yolo_time > 0 and maskrcnn_time > 0:
+            speed_ratio = maskrcnn_time / yolo_time
             col1, col2, col3 = st.columns(3)
             
             with col1:
                 st.metric(
                     "Speed Advantage", 
                     f"{speed_ratio:.1f}x",
-                    help="How many times faster YOLOv8n is compared to Faster R-CNN"
+                    help="How many times faster YOLOv8n is compared to Mask R-CNN"
                 )
             
             with col2:
-                detection_diff = len(yolo_detections) - len(fasterrcnn_detections)
+                detection_diff = len(yolo_detections) - len(maskrcnn_detections)
                 st.metric(
                     "Detection Difference", 
                     f"{detection_diff:+d}",
-                    help="Difference in number of detections (YOLO - Faster R-CNN)"
+                    help="Difference in number of detections (YOLO - Mask R-CNN)"
                 )
             
             with col3:
-                if yolo_detections and fasterrcnn_detections:
+                if yolo_detections and maskrcnn_detections:
                     yolo_avg_conf = np.mean([d['confidence'] for d in yolo_detections])
-                    fasterrcnn_avg_conf = np.mean([d['confidence'] for d in fasterrcnn_detections])
-                    conf_diff = yolo_avg_conf - fasterrcnn_avg_conf
+                    maskrcnn_avg_conf = np.mean([d['confidence'] for d in maskrcnn_detections])
+                    conf_diff = yolo_avg_conf - maskrcnn_avg_conf
                     st.metric(
                         "Confidence Difference", 
                         f"{conf_diff:+.3f}",
-                        help="Difference in average confidence (YOLO - Faster R-CNN)"
+                        help="Difference in average confidence (YOLO - Mask R-CNN)"
                     )
         
         # Detailed detection results
@@ -514,10 +505,10 @@ def main():
                         st.write("No objects detected")
                 
                 with col2:
-                    st.markdown("#### Faster R-CNN Detections")
-                    if fasterrcnn_detections:
-                        fasterrcnn_df = pd.DataFrame(fasterrcnn_detections)
-                        st.dataframe(fasterrcnn_df, use_container_width=True)
+                    st.markdown("#### Mask R-CNN Detections")
+                    if maskrcnn_detections:
+                        maskrcnn_df = pd.DataFrame(maskrcnn_detections)
+                        st.dataframe(maskrcnn_df, use_container_width=True)
                     else:
                         st.write("No objects detected")
     
@@ -534,12 +525,13 @@ def main():
         - Fast, lightweight model optimized for speed
         - Single-shot detection architecture
         - Good for real-time applications
-        - Typically faster than Faster R-CNN
+        - Typically 5-10x faster than Mask R-CNN
         
-        **🔴 Faster R-CNN (Region-based Convolutional Neural Network)**
-        - More accurate but slower detection than single-shot detectors
+        **🔴 Mask R-CNN (Region-based CNN)**
+        - More accurate but slower detection
         - Two-stage detection architecture  
-        - Good for precision-critical applications
+        - Better for precision-critical applications
+        - Can also perform instance segmentation
         
         **Features:**
         - Side-by-side visual comparison
