@@ -13,25 +13,27 @@ warnings.filterwarnings('ignore')
 
 # ML Libraries
 from transformers import pipeline
+from ultralytics import YOLO # Import YOLO from ultralytics
 # PIL (Pillow) for image processing
 from PIL import Image, ImageDraw, ImageFont
 
 # Configuration Constants (Defined at the top for global access)
 CONF_THRESHOLD = 0.5 # Confidence threshold for displaying detections
-PERSON_LABEL = "person" # The label for people in COCO dataset (common for these models)
+PERSON_LABEL = "person" # The label for people in COCO dataset (class ID 0 in YOLOv8 trained on COCO)
 
-# Initialize Hugging Face Pipelines (Cached to avoid re-loading on every rerun)
+# Initialize Models (Cached to avoid re-loading on every rerun)
 @st.cache_resource
-def load_yolos_pipeline():
-    """Loads the YOLOS Hugging Face pipeline."""
-    return pipeline("object-detection", model="hustvl/yolos-tiny")
+def load_yolov8_model():
+    """Loads the YOLOv8n model from Ultralytics."""
+    # Using 'yolov8n.pt' (nano version) as a lightweight general model
+    return YOLO("yolov8n.pt")
 
 @st.cache_resource
 def load_detr_pipeline():
     """Loads the DETR Hugging Face pipeline."""
     return pipeline("object-detection", model="facebook/detr-resnet-50")
 
-yolos_pipeline = load_yolos_pipeline()
+yolov8_model = load_yolov8_model()
 detr_pipeline = load_detr_pipeline()
 
 
@@ -59,51 +61,50 @@ def format_crowd_results(title, data, time_taken):
         summary += f"  - `✓ Valid`: `{person_stats['true']}`, `✗ Invalid`: `{person_stats['false']}`\n"
     return summary
 
-def run_hf_crowd_detection(hf_pipeline, image_path):
+def run_yolov8_crowd_detection(yolo_model, image_path):
     """
-    Runs a Hugging Face object detection pipeline on an image,
-    and specifically processes detections for 'person' class.
+    Runs YOLOv8 model on an image for crowd detection.
     Returns filtered detection data, time taken, and an annotated image focusing on 'person'.
     """
-    # Open image using PIL and ensure it's in RGB mode
-    img = Image.open(image_path).convert("RGB")
-
+    img_pil = Image.open(image_path).convert("RGB")
+    
     start = time.time()
-    # Pass PIL Image object to the pipeline. Hugging Face pipelines usually handle PIL input.
-    predictions = hf_pipeline(img)
+    # YOLOv8 predict method can take PIL Image directly.
+    # classes=[0] filters for 'person' class (COCO dataset class ID 0).
+    # conf=CONF_THRESHOLD applies the confidence threshold directly during prediction.
+    results = yolo_model.predict(source=img_pil, conf=CONF_THRESHOLD, classes=[0], verbose=False) # verbose=False to suppress output
     end = time.time()
 
-    data = {PERSON_LABEL: {"count": 0, "confidences": [], "true": 0, "false": 0}} # Initialize data for 'person'
-    annotated_img = img.copy() # Create a copy to draw on
-    draw = ImageDraw.Draw(annotated_img)
+    data = {PERSON_LABEL: {"count": 0, "confidences": [], "true": 0, "false": 0}}
+    annotated_img_pil = img_pil.copy()
+    draw = ImageDraw.Draw(annotated_img_pil)
     try:
-        # Try to load a default font for drawing text
         font = ImageFont.truetype("arial.ttf", 15)
     except IOError:
-        # Fallback to default PIL font if arial.ttf is not found (common in some environments)
         font = ImageFont.load_default()
 
     person_detections = []
 
-    for pred in predictions:
-        label = pred['label']
-        score = pred['score']
+    # Process results. Each result object contains boxes, masks, etc.
+    if results and len(results) > 0:
+        for box in results[0].boxes: # Iterate through bounding boxes
+            x_min, y_min, x_max, y_max = map(int, box.xyxy[0].tolist()) # Get box coordinates
+            score = box.conf.item() # Confidence score
+            
+            # Since we filtered by classes=[0], we know it's a person.
+            # Using the actual label name for consistency in data.
+            label = PERSON_LABEL 
 
-        if label == PERSON_LABEL: # Only process 'person' detections for crowd counting
-            box = pred['box']
-            x_min, y_min, x_max, y_max = int(box['xmin']), int(box['ymin']), int(box['xmax']), int(box['ymax'])
+            # Draw bounding box
+            draw.rectangle([x_min, y_min, x_max, y_max], outline=(0, 255, 0), width=2)
 
-            # Draw bounding box using PIL
-            draw.rectangle([x_min, y_min, x_max, y_max], outline=(0, 255, 0), width=2) # Green color, 2px thickness
-
-            # Put label and confidence using PIL
+            # Put label and confidence
             text = f"{label}: {score:.2f}"
-            # Adjust text position to ensure it's visible if box is too close to top
             text_y = y_min - 15 if y_min - 15 > 0 else y_min + 5
             draw.text((x_min, text_y), text, fill=(0, 255, 0), font=font)
 
             conf = float(score)
-            valid = conf > CONF_THRESHOLD
+            valid = conf > CONF_THRESHOLD # Already filtered by predict, but keep for consistency
 
             data[PERSON_LABEL]["count"] += 1
             data[PERSON_LABEL]["confidences"].append(conf)
@@ -112,73 +113,120 @@ def run_hf_crowd_detection(hf_pipeline, image_path):
             person_detections.append({
                 "label": label,
                 "score": score,
-                "box": box,
+                "box": {"xmin": x_min, "ymin": y_min, "xmax": x_max, "ymax": y_max},
                 "valid": valid
             })
 
-    # Convert the annotated PIL Image back to a NumPy array for Streamlit display
+    return data, end - start, np.array(annotated_img_pil), person_detections
+
+def run_detr_hf_crowd_detection(hf_pipeline, image_path):
+    """
+    Runs DETR (Hugging Face) model on an image for crowd detection.
+    Returns filtered detection data, time taken, and an annotated image focusing on 'person'.
+    This is adapted from the previous `run_hf_crowd_detection`.
+    """
+    img_pil = Image.open(image_path).convert("RGB")
+
+    start = time.time()
+    predictions = hf_pipeline(img_pil) # Pass PIL Image object to the pipeline
+    end = time.time()
+
+    data = {PERSON_LABEL: {"count": 0, "confidences": [], "true": 0, "false": 0}}
+    annotated_img = img_pil.copy()
+    draw = ImageDraw.Draw(annotated_img)
+    try:
+        font = ImageFont.truetype("arial.ttf", 15)
+    except IOError:
+        font = ImageFont.load_default()
+
+    person_detections = []
+
+    for pred in predictions:
+        label = pred['label']
+        score = pred['score']
+
+        if label == PERSON_LABEL and score >= CONF_THRESHOLD: # Filter for 'person' and confidence
+            box = pred['box']
+            x_min, y_min, x_max, y_max = int(box['xmin']), int(box['ymin']), int(box['xmax']), int(box['ymax'])
+
+            # Draw bounding box using PIL
+            draw.rectangle([x_min, y_min, x_max, y_max], outline=(0, 255, 0), width=2)
+
+            # Put label and confidence
+            text = f"{label}: {score:.2f}"
+            text_y = y_min - 15 if y_min - 15 > 0 else y_min + 5
+            draw.text((x_min, text_y), text, fill=(0, 255, 0), font=font)
+
+            conf = float(score)
+            valid = True # Valid if it passed the threshold check above
+
+            data[PERSON_LABEL]["count"] += 1
+            data[PERSON_LABEL]["confidences"].append(conf)
+            data[PERSON_LABEL]["true"] += 1
+            # For DETR, if it passes the threshold, it's 'true'. No 'false' here based on this filtering.
+
+            person_detections.append({
+                "label": label,
+                "score": score,
+                "box": box,
+                "valid": valid
+            })
+        elif label == PERSON_LABEL and score < CONF_THRESHOLD:
+             # Count as 'false' if it's a person but below threshold
+            conf = float(score)
+            data[PERSON_LABEL]["count"] += 1
+            data[PERSON_LABEL]["confidences"].append(conf)
+            data[PERSON_LABEL]["false"] += 1
+
+
     return data, end - start, np.array(annotated_img), person_detections
-
-def create_comparison_table(yolos_data, detr_data, yolos_time, detr_time):
-    """Creates a consolidated DataFrame for model comparison."""
-    # Ensure 'person' data exists for both, otherwise default to 0
-    yolos_person_count = yolos_data.get(PERSON_LABEL, {}).get("count", 0)
-    detr_person_count = detr_data.get(PERSON_LABEL, {}).get("count", 0)
-
-    yolos_avg_conf = yolos_data.get(PERSON_LABEL, {}).get("confidences", [])
-    yolos_avg_conf = sum(yolos_avg_conf) / len(yolos_avg_conf) if yolos_avg_conf else 0
-
-    detr_avg_conf = detr_data.get(PERSON_LABEL, {}).get("confidences", [])
-    detr_avg_conf = sum(detr_avg_conf) / len(detr_avg_conf) if detr_avg_conf else 0
-
-    comparison_df = pd.DataFrame({
-        "Metric": ["Total People Detected", "Average Confidence", "Processing Time (s)"],
-        "YOLOS (Hugging Face)": [yolos_person_count, f"{yolos_avg_conf:.2f}", f"{yolos_time:.2f}"],
-        "DETR (Hugging Face)": [detr_person_count, f"{detr_avg_conf:.2f}", f"{detr_time:.2f}"]
-    })
-    return comparison_df
 
 
 def analyze_image_crowd(input_img=None, url=None):
-    """Analyze image for crowd detection with YOLOS and DETR (both using Hugging Face pipelines)"""
+    """Analyze image for crowd detection with YOLOv8 (Ultralytics) and DETR (Hugging Face)"""
     # Get image path
     if url:
         img_path = download_image(url)
     elif input_img:
-        img_path = input_img
+        # Streamlit's file_uploader returns a BytesIO object.
+        # We save it to a temporary file for YOLOv8 and DETR pipelines to consume.
+        temp_image_path = f"uploaded_{uuid.uuid4().hex[:6]}.jpg"
+        with open(temp_image_path, "wb") as f:
+            f.write(input_img.read()) # Read the content of BytesIO object
+        img_path = temp_image_path
     else:
         st.info("Please upload an image or provide an image URL to begin crowd detection.")
-        return None, None, None, None, None, None, None, None, None # Return None for all outputs
-
-    if not img_path: # If download_image failed
         return None, None, None, None, None, None, None, None, None
 
+    if not img_path: # If image processing/download failed
+        return None, None, None, None, None, None, None, None, None
 
     # Run both models for crowd detection
-    yolos_person_data, yolos_time, yolos_img_np, yolos_raw_detections = run_hf_crowd_detection(yolos_pipeline, img_path)
-    detr_person_data, detr_time, detr_img_np, detr_raw_detections = run_hf_crowd_detection(detr_pipeline, img_path)
+    yolov8_person_data, yolov8_time, yolov8_img_np, yolov8_raw_detections = run_yolov8_crowd_detection(yolov8_model, img_path)
+    detr_person_data, detr_time, detr_img_np, detr_raw_detections = run_detr_hf_crowd_detection(detr_pipeline, img_path)
 
     # Format results
-    yolos_summary = format_crowd_results("YOLOS (Hugging Face)", yolos_person_data, yolos_time)
+    yolov8_summary = format_crowd_results("YOLOv8 (Ultralytics)", yolov8_person_data, yolov8_time)
     detr_summary = format_crowd_results("DETR (Hugging Face)", detr_person_data, detr_time)
 
     # Load original image with PIL and convert to numpy for Streamlit
+    # Re-open original image to ensure it's not affected by drawing operations if img_path was manipulated.
     original_img_pil = Image.open(img_path).convert("RGB")
     original_img_rgb = np.array(original_img_pil)
 
     # Convert raw person detections to DataFrames
-    yolos_df_raw = pd.DataFrame(yolos_raw_detections)
+    yolov8_df_raw = pd.DataFrame(yolov8_raw_detections)
     detr_df_raw = pd.DataFrame(detr_raw_detections)
 
 
-    return original_img_rgb, yolos_img_np, detr_img_np, yolos_summary, detr_summary, yolos_df_raw, detr_df_raw, yolos_time, detr_time
+    return original_img_rgb, yolov8_img_np, detr_img_np, yolov8_summary, detr_summary, yolov8_df_raw, detr_df_raw, yolov8_time, detr_time
 
 # Streamlit UI
-st.title("Crowd Detection Comparison: YOLOS vs. DETR (Hugging Face)")
+st.title("Crowd Detection Comparison: YOLOv8 (Ultralytics) vs. DETR (Hugging Face)")
 st.markdown(
     """
     Upload an image or enter a URL to detect and count people in crowds using both
-    YOLOS and DETR models from Hugging Face Transformers.
+    YOLOv8 from Ultralytics and DETR from Hugging Face Transformers.
     """
 )
 
@@ -197,19 +245,20 @@ with st.container():
     if uploaded_file is not None or image_url:
         temp_image_path = None
         if uploaded_file:
-            # Save uploaded file to a temporary path
+            # Streamlit's file_uploader returns a BytesIO object.
+            # We save it to a temporary file for YOLOv8 and DETR pipelines to consume.
             temp_image_path = f"uploaded_{uuid.uuid4().hex[:6]}.jpg"
             with open(temp_image_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+                f.write(uploaded_file.read()) # Read the content of BytesIO object
         elif image_url:
             temp_image_path = download_image(image_url)
 
         if temp_image_path: # Only proceed if an image path was successfully obtained
             with st.spinner("Analyzing image... This may take a moment."):
-                original_img_rgb, yolos_img_np, detr_img_np, \
-                yolos_summary, detr_summary, \
-                yolos_df_raw, detr_df_raw, \
-                yolos_time, detr_time = analyze_image_crowd(input_img=temp_image_path)
+                original_img_rgb, yolov8_img_np, detr_img_np, \
+                yolov8_summary, detr_summary, \
+                yolov8_df_raw, detr_df_raw, \
+                yolov8_time, detr_time = analyze_image_crowd(input_img=uploaded_file if uploaded_file else None, url=image_url if not uploaded_file else None) # Pass uploaded_file object directly if available
 
             if original_img_rgb is not None: # Check if analysis was successful
                 st.markdown("---")
@@ -220,7 +269,7 @@ with st.container():
                 with img_cols[0]:
                     st.image(original_img_rgb, caption="Original Image", use_column_width=True)
                 with img_cols[1]:
-                    st.image(yolos_img_np, caption="YOLOS Detections", use_column_width=True)
+                    st.image(yolov8_img_np, caption="YOLOv8 Detections", use_column_width=True)
                 with img_cols[2]:
                     st.image(detr_img_np, caption="DETR Detections", use_column_width=True)
 
@@ -228,38 +277,39 @@ with st.container():
                 st.header("Comparison Summary")
                 st.markdown("Here's a quick overview of the crowd detection results from both models:")
 
-                # Ensure create_comparison_table uses the data dictionaries derived from raw detections
-                # The data dictionaries `yolos_person_data` and `detr_person_data` are already passed correctly
-                # from analyze_image_crowd before. We just need to ensure `analyze_image_crowd` returns them.
-                # Let's rebuild the data dictionaries for `create_comparison_table` from `_df_raw` for consistency.
-                yolos_summary_data_for_table = {PERSON_LABEL: {'count': yolos_df_raw.shape[0] if not yolos_df_raw.empty else 0,
-                                                               'confidences': yolos_df_raw['score'].tolist() if not yolos_df_raw.empty else [],
-                                                               'true': yolos_df_raw[yolos_df_raw['valid'] == True].shape[0] if not yolos_df_raw.empty else 0,
-                                                               'false': yolos_df_raw[yolos_df_raw['valid'] == False].shape[0] if not yolos_df_raw.empty else 0}}
+                # Create two columns for side-by-side display of the comparison table and detailed summaries
+                comp_table_col, detailed_summary_col = st.columns(2)
 
-                detr_summary_data_for_table = {PERSON_LABEL: {'count': detr_df_raw.shape[0] if not detr_df_raw.empty else 0,
-                                                               'confidences': detr_df_raw['score'].tolist() if not detr_df_raw.empty else [],
-                                                               'true': detr_df_raw[detr_df_raw['valid'] == True].shape[0] if not detr_df_raw.empty else 0,
-                                                               'false': detr_df_raw[detr_df_raw['valid'] == False].shape[0] if not detr_df_raw.empty else 0}}
+                with comp_table_col:
+                    st.subheader("Performance Metrics")
+                    # Ensure create_comparison_table uses the data dictionaries derived from raw detections
+                    yolov8_summary_data_for_table = {PERSON_LABEL: {'count': yolov8_df_raw.shape[0] if not yolov8_df_raw.empty else 0,
+                                                                   'confidences': yolov8_df_raw['score'].tolist() if not yolov8_df_raw.empty else [],
+                                                                   'true': yolov8_df_raw[yolov8_df_raw['valid'] == True].shape[0] if not yolov8_df_raw.empty else 0,
+                                                                   'false': yolov8_df_raw[yolov8_df_raw['valid'] == False].shape[0] if not yolov8_df_raw.empty else 0}}
 
-                comparison_table = create_comparison_table(yolos_summary_data_for_table, detr_summary_data_for_table, yolos_time, detr_time)
-                st.dataframe(comparison_table, hide_index=True)
+                    detr_summary_data_for_table = {PERSON_LABEL: {'count': detr_df_raw.shape[0] if not detr_df_raw.empty else 0,
+                                                                   'confidences': detr_df_raw['score'].tolist() if not detr_df_raw.empty else [],
+                                                                   'true': detr_df_raw[detr_df_raw['valid'] == True].shape[0] if not detr_df_raw.empty else 0,
+                                                                   'false': detr_df_raw[detr_df_raw['valid'] == False].shape[0] if not detr_df_raw.empty else 0}}
 
+                    comparison_table = create_comparison_table(yolov8_summary_data_for_table, detr_summary_data_for_table, yolov8_time, detr_time)
+                    st.dataframe(comparison_table, hide_index=True)
 
-                st.markdown("---")
-                st.header("Detailed Summaries")
-                summary_cols = st.columns(2)
-                with summary_cols[0]:
-                    st.subheader("YOLOS (Hugging Face) Summary")
-                    st.markdown(yolos_summary)
-                with summary_cols[1]:
-                    st.subheader("DETR (Hugging Face) Summary")
-                    st.markdown(detr_summary)
+                with detailed_summary_col:
+                    st.subheader("Detailed Summaries")
+                    summary_cols_inner = st.columns(2) # Inner columns for the two detailed summaries
+                    with summary_cols_inner[0]:
+                        st.text("YOLOv8 (Ultralytics) Summary:") # Use st.text for pre-formatted output
+                        st.markdown(yolov8_summary)
+                    with summary_cols_inner[1]:
+                        st.text("DETR (Hugging Face) Summary:")
+                        st.markdown(detr_summary)
 
                 st.markdown("---")
                 st.header("Raw Detections Data")
-                tab1, tab2 = st.tabs(["YOLOS Raw Detections", "DETR Raw Detections"])
+                tab1, tab2 = st.tabs(["YOLOv8 Raw Detections", "DETR Raw Detections"])
                 with tab1:
-                    st.dataframe(yolos_df_raw)
+                    st.dataframe(yolov8_df_raw)
                 with tab2:
                     st.dataframe(detr_df_raw)
