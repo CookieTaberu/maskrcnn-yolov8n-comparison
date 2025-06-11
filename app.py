@@ -26,7 +26,7 @@ PERSON_LABEL = "person" # The label for people in COCO dataset (class ID 0 in yo
 def load_yolov11_model():
     """Loads the YOLOv11n model from Ultralytics."""
     # Using 'yolo11n.pt' (nano version) as a lightweight general model
-    return YOLO("yolo11n.pt")
+    return YOLO("yolo11x.pt")
 
 @st.cache_resource
 def load_detr_pipeline():
