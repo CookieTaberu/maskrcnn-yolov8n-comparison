@@ -183,6 +183,26 @@ def run_detr_hf_crowd_detection(hf_pipeline, image_path):
     return data, end - start, np.array(annotated_img), person_detections
 
 
+def create_comparison_table(yolos_data, detr_data, yolos_time, detr_time):
+    """Creates a consolidated DataFrame for model comparison."""
+    # This function is correct.
+    yolos_person_count = yolos_data.get(PERSON_LABEL, {}).get("count", 0)
+    detr_person_count = detr_data.get(PERSON_LABEL, {}).get("count", 0)
+
+    yolos_avg_conf = yolos_data.get(PERSON_LABEL, {}).get("confidences", [])
+    yolos_avg_conf = sum(yolos_avg_conf) / len(yolos_avg_conf) if yolos_avg_conf else 0
+
+    detr_avg_conf = detr_data.get(PERSON_LABEL, {}).get("confidences", [])
+    detr_avg_conf = sum(detr_avg_conf) / len(detr_avg_conf) if detr_avg_conf else 0
+
+    comparison_df = pd.DataFrame({
+        "Metric": ["Total People Detected", "Average Confidence", "Processing Time (s)"],
+        "YOLOv8 (Ultralytics)": [yolos_person_count, f"{yolos_avg_conf:.2f}", f"{yolos_time:.2f}"],
+        "DETR (Hugging Face)": [detr_person_count, f"{detr_avg_conf:.2f}", f"{detr_time:.2f}"]
+    })
+    return comparison_df
+
+
 def analyze_image_crowd(image_path_or_url=None):
     """
     Analyze image for crowd detection with YOLOv8 (Ultralytics) and DETR (Hugging Face).
