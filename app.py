@@ -1,4 +1,8 @@
-import streamlit as st
+import streamlit as st # Import streamlit first for set_page_config
+
+# Streamlit UI Configuration - MUST be the first Streamlit command
+st.set_page_config(layout="wide", page_title="Crowd Detection Comparison")
+
 import time
 import uuid
 import urllib.request
@@ -135,9 +139,41 @@ def create_comparison_table(yolos_data, detr_data, yolos_time, detr_time):
     return comparison_df
 
 
-# Streamlit UI
-st.set_page_config(layout="wide", page_title="Crowd Detection Comparison")
+def analyze_image_crowd(input_img=None, url=None):
+    """Analyze image for crowd detection with YOLOS and DETR (both using Hugging Face pipelines)"""
+    # Get image path
+    if url:
+        img_path = download_image(url)
+    elif input_img:
+        img_path = input_img
+    else:
+        st.info("Please upload an image or provide an image URL to begin crowd detection.")
+        return None, None, None, None, None, None, None, None, None # Return None for all outputs
 
+    if not img_path: # If download_image failed
+        return None, None, None, None, None, None, None, None, None
+
+
+    # Run both models for crowd detection
+    yolos_person_data, yolos_time, yolos_img_np, yolos_raw_detections = run_hf_crowd_detection(yolos_pipeline, img_path)
+    detr_person_data, detr_time, detr_img_np, detr_raw_detections = run_hf_crowd_detection(detr_pipeline, img_path)
+
+    # Format results
+    yolos_summary = format_crowd_results("YOLOS (Hugging Face)", yolos_person_data, yolos_time)
+    detr_summary = format_crowd_results("DETR (Hugging Face)", detr_person_data, detr_time)
+
+    # Load original image with PIL and convert to numpy for Streamlit
+    original_img_pil = Image.open(img_path).convert("RGB")
+    original_img_rgb = np.array(original_img_pil)
+
+    # Convert raw person detections to DataFrames
+    yolos_df_raw = pd.DataFrame(yolos_raw_detections)
+    detr_df_raw = pd.DataFrame(detr_raw_detections)
+
+
+    return original_img_rgb, yolos_img_np, detr_img_np, yolos_summary, detr_summary, yolos_df_raw, detr_df_raw, yolos_time, detr_time
+
+# Streamlit UI
 st.title("Crowd Detection Comparison: YOLOS vs. DETR (Hugging Face)")
 st.markdown(
     """
@@ -149,82 +185,81 @@ st.markdown(
 # Input section
 with st.container():
     col1, col2 = st.columns(2)
+    uploaded_file = None
+    image_url = ""
+
     with col1:
         uploaded_file = st.file_uploader("Upload an Image", type=["jpg", "jpeg", "png"])
     with col2:
         image_url = st.text_input("OR Enter Image URL (optional)", "")
 
+    # Check if any input is provided before proceeding
     if uploaded_file is not None or image_url:
         temp_image_path = None
         if uploaded_file:
+            # Save uploaded file to a temporary path
             temp_image_path = f"uploaded_{uuid.uuid4().hex[:6]}.jpg"
             with open(temp_image_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
         elif image_url:
             temp_image_path = download_image(image_url)
 
-        if temp_image_path:
+        if temp_image_path: # Only proceed if an image path was successfully obtained
             with st.spinner("Analyzing image... This may take a moment."):
                 original_img_rgb, yolos_img_np, detr_img_np, \
                 yolos_summary, detr_summary, \
                 yolos_df_raw, detr_df_raw, \
                 yolos_time, detr_time = analyze_image_crowd(input_img=temp_image_path)
 
-            st.markdown("---")
-            st.header("Results")
+            if original_img_rgb is not None: # Check if analysis was successful
+                st.markdown("---")
+                st.header("Results")
 
-            # Display images
-            img_cols = st.columns(3)
-            with img_cols[0]:
-                st.image(original_img_rgb, caption="Original Image", use_column_width=True)
-            with img_cols[1]:
-                st.image(yolos_img_np, caption="YOLOS Detections", use_column_width=True)
-            with img_cols[2]:
-                st.image(detr_img_np, caption="DETR Detections", use_column_width=True)
+                # Display images
+                img_cols = st.columns(3)
+                with img_cols[0]:
+                    st.image(original_img_rgb, caption="Original Image", use_column_width=True)
+                with img_cols[1]:
+                    st.image(yolos_img_np, caption="YOLOS Detections", use_column_width=True)
+                with img_cols[2]:
+                    st.image(detr_img_np, caption="DETR Detections", use_column_width=True)
 
-            st.markdown("---")
-            st.header("Comparison Summary")
-            st.markdown("Here's a quick overview of the crowd detection results from both models:")
-            comparison_table = create_comparison_table(
-                yolos_person_data={PERSON_LABEL: yolos_df_raw.to_dict('list')} if not yolos_df_raw.empty else {},
-                detr_person_data={PERSON_LABEL: detr_df_raw.to_dict('list')} if not detr_df_raw.empty else {},
-                yolos_time=yolos_time,
-                detr_time=detr_time
-            )
-            # Re-process data for comparison table to extract actual counts/confidences from dataframes
-            # Assuming format_crowd_results 'data' param expects a dict with 'person' key directly containing count, confidences, etc.
-            # Let's adjust create_comparison_table to properly use the summarized `data` dictionaries.
-            yolos_summary_data = {PERSON_LABEL: {'count': yolos_df_raw['label'].count() if not yolos_df_raw.empty else 0,
-                                                 'confidences': yolos_df_raw['score'].tolist() if not yolos_df_raw.empty else [],
-                                                 'true': yolos_df_raw[yolos_df_raw['valid'] == True].shape[0] if not yolos_df_raw.empty else 0,
-                                                 'false': yolos_df_raw[yolos_df_raw['valid'] == False].shape[0] if not yolos_df_raw.empty else 0}}
+                st.markdown("---")
+                st.header("Comparison Summary")
+                st.markdown("Here's a quick overview of the crowd detection results from both models:")
 
-            detr_summary_data = {PERSON_LABEL: {'count': detr_df_raw['label'].count() if not detr_df_raw.empty else 0,
-                                                 'confidences': detr_df_raw['score'].tolist() if not detr_df_raw.empty else [],
-                                                 'true': detr_df_raw[detr_df_raw['valid'] == True].shape[0] if not detr_df_raw.empty else 0,
-                                                 'false': detr_df_raw[detr_df_raw['valid'] == False].shape[0] if not detr_df_raw.empty else 0}}
+                # Ensure create_comparison_table uses the data dictionaries derived from raw detections
+                # The data dictionaries `yolos_person_data` and `detr_person_data` are already passed correctly
+                # from analyze_image_crowd before. We just need to ensure `analyze_image_crowd` returns them.
+                # Let's rebuild the data dictionaries for `create_comparison_table` from `_df_raw` for consistency.
+                yolos_summary_data_for_table = {PERSON_LABEL: {'count': yolos_df_raw.shape[0] if not yolos_df_raw.empty else 0,
+                                                               'confidences': yolos_df_raw['score'].tolist() if not yolos_df_raw.empty else [],
+                                                               'true': yolos_df_raw[yolos_df_raw['valid'] == True].shape[0] if not yolos_df_raw.empty else 0,
+                                                               'false': yolos_df_raw[yolos_df_raw['valid'] == False].shape[0] if not yolos_df_raw.empty else 0}}
 
-            comparison_table = create_comparison_table(yolos_summary_data, detr_summary_data, yolos_time, detr_time)
-            st.dataframe(comparison_table, hide_index=True)
+                detr_summary_data_for_table = {PERSON_LABEL: {'count': detr_df_raw.shape[0] if not detr_df_raw.empty else 0,
+                                                               'confidences': detr_df_raw['score'].tolist() if not detr_df_raw.empty else [],
+                                                               'true': detr_df_raw[detr_df_raw['valid'] == True].shape[0] if not detr_df_raw.empty else 0,
+                                                               'false': detr_df_raw[detr_df_raw['valid'] == False].shape[0] if not detr_df_raw.empty else 0}}
+
+                comparison_table = create_comparison_table(yolos_summary_data_for_table, detr_summary_data_for_table, yolos_time, detr_time)
+                st.dataframe(comparison_table, hide_index=True)
 
 
-            st.markdown("---")
-            st.header("Detailed Summaries")
-            summary_cols = st.columns(2)
-            with summary_cols[0]:
-                st.subheader("YOLOS (Hugging Face) Summary")
-                st.markdown(yolos_summary)
-            with summary_cols[1]:
-                st.subheader("DETR (Hugging Face) Summary")
-                st.markdown(detr_summary)
+                st.markdown("---")
+                st.header("Detailed Summaries")
+                summary_cols = st.columns(2)
+                with summary_cols[0]:
+                    st.subheader("YOLOS (Hugging Face) Summary")
+                    st.markdown(yolos_summary)
+                with summary_cols[1]:
+                    st.subheader("DETR (Hugging Face) Summary")
+                    st.markdown(detr_summary)
 
-            st.markdown("---")
-            st.header("Raw Detections Data")
-            tab1, tab2 = st.tabs(["YOLOS Raw Detections", "DETR Raw Detections"])
-            with tab1:
-                st.dataframe(yolos_df_raw)
-            with tab2:
-                st.dataframe(detr_df_raw)
-        else:
-            st.info("Please upload an image or provide a URL to begin crowd detection.")
-
+                st.markdown("---")
+                st.header("Raw Detections Data")
+                tab1, tab2 = st.tabs(["YOLOS Raw Detections", "DETR Raw Detections"])
+                with tab1:
+                    st.dataframe(yolos_df_raw)
+                with tab2:
+                    st.dataframe(detr_df_raw)
