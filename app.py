@@ -66,6 +66,7 @@ def run_yolov8_crowd_detection(yolo_model, image_path):
     Runs YOLOv8 model on an image for crowd detection.
     Returns filtered detection data, time taken, and an annotated image focusing on 'person'.
     """
+    # Image.open can directly open file paths.
     img_pil = Image.open(image_path).convert("RGB")
     
     start = time.time()
@@ -182,18 +183,16 @@ def run_detr_hf_crowd_detection(hf_pipeline, image_path):
     return data, end - start, np.array(annotated_img), person_detections
 
 
-def analyze_image_crowd(input_img=None, url=None):
-    """Analyze image for crowd detection with YOLOv8 (Ultralytics) and DETR (Hugging Face)"""
-    # Get image path
-    if url:
-        img_path = download_image(url)
-    elif input_img:
-        # Streamlit's file_uploader returns a BytesIO object.
-        # We save it to a temporary file for YOLOv8 and DETR pipelines to consume.
-        temp_image_path = f"uploaded_{uuid.uuid4().hex[:6]}.jpg"
-        with open(temp_image_path, "wb") as f:
-            f.write(input_img.read()) # Read the content of BytesIO object
-        img_path = temp_image_path
+def analyze_image_crowd(image_path_or_url=None):
+    """
+    Analyze image for crowd detection with YOLOv8 (Ultralytics) and DETR (Hugging Face).
+    This function now expects a path to a temporary file, or a URL.
+    """
+    img_path = None
+    if image_path_or_url and isinstance(image_path_or_url, str) and image_path_or_url.startswith("http"):
+        img_path = download_image(image_path_or_url)
+    elif image_path_or_url and isinstance(image_path_or_url, str):
+        img_path = image_path_or_url # It's already a local file path
     else:
         st.info("Please upload an image or provide an image URL to begin crowd detection.")
         return None, None, None, None, None, None, None, None, None
@@ -210,7 +209,6 @@ def analyze_image_crowd(input_img=None, url=None):
     detr_summary = format_crowd_results("DETR (Hugging Face)", detr_person_data, detr_time)
 
     # Load original image with PIL and convert to numpy for Streamlit
-    # Re-open original image to ensure it's not affected by drawing operations if img_path was manipulated.
     original_img_pil = Image.open(img_path).convert("RGB")
     original_img_rgb = np.array(original_img_pil)
 
@@ -244,72 +242,76 @@ with st.container():
     # Check if any input is provided before proceeding
     if uploaded_file is not None or image_url:
         temp_image_path = None
+        
         if uploaded_file:
             # Streamlit's file_uploader returns a BytesIO object.
-            # We save it to a temporary file for YOLOv8 and DETR pipelines to consume.
+            # Save it to a temporary file first.
             temp_image_path = f"uploaded_{uuid.uuid4().hex[:6]}.jpg"
             with open(temp_image_path, "wb") as f:
-                f.write(uploaded_file.read()) # Read the content of BytesIO object
+                f.write(uploaded_file.read())
+            # Now, pass this temporary file path to analyze_image_crowd
+            results = analyze_image_crowd(image_path_or_url=temp_image_path)
         elif image_url:
-            temp_image_path = download_image(image_url)
+            # Pass the URL directly to analyze_image_crowd
+            results = analyze_image_crowd(image_path_or_url=image_url)
+        else:
+            results = (None,) * 9 # In case somehow neither is true, though covered by outer if
 
-        if temp_image_path: # Only proceed if an image path was successfully obtained
-            with st.spinner("Analyzing image... This may take a moment."):
-                original_img_rgb, yolov8_img_np, detr_img_np, \
-                yolov8_summary, detr_summary, \
-                yolov8_df_raw, detr_df_raw, \
-                yolov8_time, detr_time = analyze_image_crowd(input_img=uploaded_file if uploaded_file else None, url=image_url if not uploaded_file else None) # Pass uploaded_file object directly if available
+        original_img_rgb, yolov8_img_np, detr_img_np, \
+        yolov8_summary, detr_summary, \
+        yolov8_df_raw, detr_df_raw, \
+        yolov8_time, detr_time = results # Unpack results
 
-            if original_img_rgb is not None: # Check if analysis was successful
-                st.markdown("---")
-                st.header("Results")
+        if original_img_rgb is not None: # Check if analysis was successful
+            st.markdown("---")
+            st.header("Results")
 
-                # Display images
-                img_cols = st.columns(3)
-                with img_cols[0]:
-                    st.image(original_img_rgb, caption="Original Image", use_column_width=True)
-                with img_cols[1]:
-                    st.image(yolov8_img_np, caption="YOLOv8 Detections", use_column_width=True)
-                with img_cols[2]:
-                    st.image(detr_img_np, caption="DETR Detections", use_column_width=True)
+            # Display images
+            img_cols = st.columns(3)
+            with img_cols[0]:
+                st.image(original_img_rgb, caption="Original Image", use_column_width=True)
+            with img_cols[1]:
+                st.image(yolov8_img_np, caption="YOLOv8 Detections", use_column_width=True)
+            with img_cols[2]:
+                st.image(detr_img_np, caption="DETR Detections", use_column_width=True)
 
-                st.markdown("---")
-                st.header("Comparison Summary")
-                st.markdown("Here's a quick overview of the crowd detection results from both models:")
+            st.markdown("---")
+            st.header("Comparison Summary")
+            st.markdown("Here's a quick overview of the crowd detection results from both models:")
 
-                # Create two columns for side-by-side display of the comparison table and detailed summaries
-                comp_table_col, detailed_summary_col = st.columns(2)
+            # Create two columns for side-by-side display of the comparison table and detailed summaries
+            comp_table_col, detailed_summary_col = st.columns(2)
 
-                with comp_table_col:
-                    st.subheader("Performance Metrics")
-                    # Ensure create_comparison_table uses the data dictionaries derived from raw detections
-                    yolov8_summary_data_for_table = {PERSON_LABEL: {'count': yolov8_df_raw.shape[0] if not yolov8_df_raw.empty else 0,
-                                                                   'confidences': yolov8_df_raw['score'].tolist() if not yolov8_df_raw.empty else [],
-                                                                   'true': yolov8_df_raw[yolov8_df_raw['valid'] == True].shape[0] if not yolov8_df_raw.empty else 0,
-                                                                   'false': yolov8_df_raw[yolov8_df_raw['valid'] == False].shape[0] if not yolov8_df_raw.empty else 0}}
+            with comp_table_col:
+                st.subheader("Performance Metrics")
+                # Ensure create_comparison_table uses the data dictionaries derived from raw detections
+                yolov8_summary_data_for_table = {PERSON_LABEL: {'count': yolov8_df_raw.shape[0] if not yolov8_df_raw.empty else 0,
+                                                               'confidences': yolov8_df_raw['score'].tolist() if not yolov8_df_raw.empty else [],
+                                                               'true': yolov8_df_raw[yolov8_df_raw['valid'] == True].shape[0] if not yolov8_df_raw.empty else 0,
+                                                               'false': yolov8_df_raw[yolov8_df_raw['valid'] == False].shape[0] if not yolov8_df_raw.empty else 0}}
 
-                    detr_summary_data_for_table = {PERSON_LABEL: {'count': detr_df_raw.shape[0] if not detr_df_raw.empty else 0,
-                                                                   'confidences': detr_df_raw['score'].tolist() if not detr_df_raw.empty else [],
-                                                                   'true': detr_df_raw[detr_df_raw['valid'] == True].shape[0] if not detr_df_raw.empty else 0,
-                                                                   'false': detr_df_raw[detr_df_raw['valid'] == False].shape[0] if not detr_df_raw.empty else 0}}
+                detr_summary_data_for_table = {PERSON_LABEL: {'count': detr_df_raw.shape[0] if not detr_df_raw.empty else 0,
+                                                               'confidences': detr_df_raw['score'].tolist() if not detr_df_raw.empty else [],
+                                                               'true': detr_df_raw[detr_df_raw['valid'] == True].shape[0] if not detr_df_raw.empty else 0,
+                                                               'false': detr_df_raw[detr_df_raw['valid'] == False].shape[0] if not detr_df_raw.empty else 0}}
 
-                    comparison_table = create_comparison_table(yolov8_summary_data_for_table, detr_summary_data_for_table, yolov8_time, detr_time)
-                    st.dataframe(comparison_table, hide_index=True)
+                comparison_table = create_comparison_table(yolov8_summary_data_for_table, detr_summary_data_for_table, yolov8_time, detr_time)
+                st.dataframe(comparison_table, hide_index=True)
 
-                with detailed_summary_col:
-                    st.subheader("Detailed Summaries")
-                    summary_cols_inner = st.columns(2) # Inner columns for the two detailed summaries
-                    with summary_cols_inner[0]:
-                        st.text("YOLOv8 (Ultralytics) Summary:") # Use st.text for pre-formatted output
-                        st.markdown(yolov8_summary)
-                    with summary_cols_inner[1]:
-                        st.text("DETR (Hugging Face) Summary:")
-                        st.markdown(detr_summary)
+            with detailed_summary_col:
+                st.subheader("Detailed Summaries")
+                summary_cols_inner = st.columns(2) # Inner columns for the two detailed summaries
+                with summary_cols_inner[0]:
+                    st.text("YOLOv8 (Ultralytics) Summary:") # Use st.text for pre-formatted output
+                    st.markdown(yolov8_summary)
+                with summary_cols_inner[1]:
+                    st.text("DETR (Hugging Face) Summary:")
+                    st.markdown(detr_summary)
 
-                st.markdown("---")
-                st.header("Raw Detections Data")
-                tab1, tab2 = st.tabs(["YOLOv8 Raw Detections", "DETR Raw Detections"])
-                with tab1:
-                    st.dataframe(yolov8_df_raw)
-                with tab2:
-                    st.dataframe(detr_df_raw)
+            st.markdown("---")
+            st.header("Raw Detections Data")
+            tab1, tab2 = st.tabs(["YOLOv8 Raw Detections", "DETR Raw Detections"])
+            with tab1:
+                st.dataframe(yolov8_df_raw)
+            with tab2:
+                st.dataframe(detr_df_raw)
