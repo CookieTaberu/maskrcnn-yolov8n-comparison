@@ -321,11 +321,11 @@ with st.container():
                 # Display images
                 img_cols = st.columns(3)
                 with img_cols[0]:
-                    st.image(original_img_rgb, caption="Original Image", use_column_width=True)
+                    st.image(original_img_rgb, caption="Original Image", use_container_width=True)
                 with img_cols[1]:
-                    st.image(yolov8_img_np if yolov8_img_np is not None else original_img_rgb, caption="YOLOv8 Detections", use_column_width=True)
+                    st.image(yolov8_img_np if yolov8_img_np is not None else original_img_rgb, caption="YOLOv8 Detections", use_container_width=True)
                 with img_cols[2]:
-                    st.image(detr_img_np if detr_img_np is not None else original_img_rgb, caption="DETR Detections", use_column_width=True)
+                    st.image(detr_img_np if detr_img_np is not None else original_img_rgb, caption="DETR Detections", use_container_width=True)
 
                 st.markdown("---")
                 st.header("Comparison Summary")
