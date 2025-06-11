@@ -19,21 +19,21 @@ from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError # Import Uni
 
 # Configuration Constants (Defined at the top for global access)
 CONF_THRESHOLD = 0.5 # Confidence threshold for displaying detections
-PERSON_LABEL = "person" # The label for people in COCO dataset (class ID 0 in YOLOv8 trained on COCO)
+PERSON_LABEL = "person" # The label for people in COCO dataset (class ID 0 in yolov11 trained on COCO)
 
 # Initialize Models (Cached to avoid re-loading on every rerun)
 @st.cache_resource
-def load_yolov8_model():
-    """Loads the YOLOv8n model from Ultralytics."""
-    # Using 'yolov8n.pt' (nano version) as a lightweight general model
-    return YOLO("yolov8n.pt")
+def load_yolov11_model():
+    """Loads the YOLOv11n model from Ultralytics."""
+    # Using 'yolov11n.pt' (nano version) as a lightweight general model
+    return YOLO("yolov11n.pt")
 
 @st.cache_resource
 def load_detr_pipeline():
     """Loads the DETR Hugging Face pipeline."""
     return pipeline("object-detection", model="facebook/detr-resnet-50")
 
-yolov8_model = load_yolov8_model()
+yolov11_model = load_yolov11_model()
 detr_pipeline = load_detr_pipeline()
 
 
@@ -61,16 +61,16 @@ def format_crowd_results(title, data, time_taken):
         summary += f"  - `✓ Valid`: `{person_stats['true']}`, `✗ Invalid`: `{person_stats['false']}`\n"
     return summary
 
-def run_yolov8_crowd_detection(yolo_model, image_path):
+def run_yolov11_crowd_detection(yolo_model, image_path):
     """
-    Runs YOLOv8 model on an image for crowd detection.
+    Runs yolov11 model on an image for crowd detection.
     Returns filtered detection data, time taken, and an annotated image focusing on 'person'.
     """
     # Image.open can directly open file paths.
     img_pil = Image.open(image_path).convert("RGB")
     
     start = time.time()
-    # YOLOv8 predict method can take PIL Image directly.
+    # yolov11 predict method can take PIL Image directly.
     # classes=[0] filters for 'person' class (COCO dataset class ID 0).
     # conf=CONF_THRESHOLD applies the confidence threshold directly during prediction.
     results = yolo_model.predict(source=img_pil, conf=CONF_THRESHOLD, classes=[0], verbose=False) # verbose=False to suppress output
@@ -197,7 +197,7 @@ def create_comparison_table(yolos_data, detr_data, yolos_time, detr_time):
 
     comparison_df = pd.DataFrame({
         "Metric": ["Total People Detected", "Average Confidence", "Processing Time (s)"],
-        "YOLOv8 (Ultralytics)": [yolos_person_count, f"{yolos_avg_conf:.2f}", f"{yolos_time:.2f}"],
+        "yolov11 (Ultralytics)": [yolos_person_count, f"{yolos_avg_conf:.2f}", f"{yolos_time:.2f}"],
         "DETR (Hugging Face)": [detr_person_count, f"{detr_avg_conf:.2f}", f"{detr_time:.2f}"]
     })
     return comparison_df
@@ -205,7 +205,7 @@ def create_comparison_table(yolos_data, detr_data, yolos_time, detr_time):
 
 def analyze_image_crowd(image_path_or_url=None):
     """
-    Analyze image for crowd detection with YOLOv8 (Ultralytics) and DETR (Hugging Face).
+    Analyze image for crowd detection with yolov11 (Ultralytics) and DETR (Hugging Face).
     This function now expects a path to a temporary file, or a URL.
     Returns default values if any step fails.
     """
@@ -220,18 +220,18 @@ def analyze_image_crowd(image_path_or_url=None):
 
     # Initialize all return values with defaults in case of any failure below
     original_img_rgb = None
-    yolov8_person_data, yolov8_time, yolov8_img_np, yolov8_raw_detections = {PERSON_LABEL: {"count": 0, "confidences": [], "true": 0, "false": 0}}, 0.0, None, []
+    yolov11_person_data, yolov11_time, yolov11_img_np, yolov11_raw_detections = {PERSON_LABEL: {"count": 0, "confidences": [], "true": 0, "false": 0}}, 0.0, None, []
     detr_person_data, detr_time, detr_img_np, detr_raw_detections = {PERSON_LABEL: {"count": 0, "confidences": [], "true": 0, "false": 0}}, 0.0, None, []
-    yolov8_df_raw = pd.DataFrame()
+    yolov11_df_raw = pd.DataFrame()
     detr_df_raw = pd.DataFrame()
-    yolov8_summary = ""
+    yolov11_summary = ""
     detr_summary = ""
 
     if not img_path: # If image processing/download failed
-        return original_img_rgb, yolov8_img_np, detr_img_np, \
-               yolov8_summary, detr_summary, \
-               yolov8_df_raw, detr_df_raw, \
-               yolov8_time, detr_time
+        return original_img_rgb, yolov11_img_np, detr_img_np, \
+               yolov11_summary, detr_summary, \
+               yolov11_df_raw, detr_df_raw, \
+               yolov11_time, detr_time
 
     # Load original image first to potentially catch UnidentifiedImageError early
     try:
@@ -239,24 +239,24 @@ def analyze_image_crowd(image_path_or_url=None):
         original_img_rgb = np.array(original_img_pil)
     except UnidentifiedImageError:
         st.error("Error: Could not identify or open the image. Please ensure it's a valid image file.")
-        return original_img_rgb, yolov8_img_np, detr_img_np, \
-               yolov8_summary, detr_summary, \
-               yolov8_df_raw, detr_df_raw, \
-               yolov8_time, detr_time
+        return original_img_rgb, yolov11_img_np, detr_img_np, \
+               yolov11_summary, detr_summary, \
+               yolov11_df_raw, detr_df_raw, \
+               yolov11_time, detr_time
     except Exception as e:
         st.error(f"Error loading original image: {e}")
-        return original_img_rgb, yolov8_img_np, detr_img_np, \
-               yolov8_summary, detr_summary, \
-               yolov8_df_raw, detr_df_raw, \
-               yolov8_time, detr_time
+        return original_img_rgb, yolov11_img_np, detr_img_np, \
+               yolov11_summary, detr_summary, \
+               yolov11_df_raw, detr_df_raw, \
+               yolov11_time, detr_time
 
-    # Run YOLOv8 model
+    # Run yolov11 model
     try:
-        yolov8_person_data, yolov8_time, yolov8_img_np, yolov8_raw_detections = run_yolov8_crowd_detection(yolov8_model, img_path)
-        yolov8_df_raw = pd.DataFrame(yolov8_raw_detections)
-        yolov8_summary = format_crowd_results("YOLOv8 (Ultralytics)", yolov8_person_data, yolov8_time)
+        yolov11_person_data, yolov11_time, yolov11_img_np, yolov11_raw_detections = run_yolov11_crowd_detection(yolov11_model, img_path)
+        yolov11_df_raw = pd.DataFrame(yolov11_raw_detections)
+        yolov11_summary = format_crowd_results("yolov11 (Ultralytics)", yolov11_person_data, yolov11_time)
     except Exception as e:
-        st.error(f"YOLOv8 analysis failed: {e}")
+        st.error(f"yolov11 analysis failed: {e}")
         # Default values already set at the start
 
     # Run DETR model
@@ -268,17 +268,17 @@ def analyze_image_crowd(image_path_or_url=None):
         st.error(f"DETR analysis failed: {e}")
         # Default values already set at the start
 
-    return original_img_rgb, yolov8_img_np, detr_img_np, \
-           yolov8_summary, detr_summary, \
-           yolov8_df_raw, detr_df_raw, \
-           yolov8_time, detr_time
+    return original_img_rgb, yolov11_img_np, detr_img_np, \
+           yolov11_summary, detr_summary, \
+           yolov11_df_raw, detr_df_raw, \
+           yolov11_time, detr_time
 
 # Streamlit UI
-st.title("Crowd Detection Comparison: YOLOv8 (Ultralytics) vs. DETR (Hugging Face)")
+st.title("Crowd Detection Comparison: yolov11 (Ultralytics) vs. DETR (Hugging Face)")
 st.markdown(
     """
     Upload an image or enter a URL to detect and count people in crowds using both
-    YOLOv8 from Ultralytics and DETR from Hugging Face Transformers.
+    yolov11 from Ultralytics and DETR from Hugging Face Transformers.
     """
 )
 
@@ -309,10 +309,10 @@ with st.container():
         
         if temp_input_for_analysis: # Only proceed if a valid input was obtained
             with st.spinner("Analyzing image... This may take a moment."):
-                original_img_rgb, yolov8_img_np, detr_img_np, \
-                yolov8_summary, detr_summary, \
-                yolov8_df_raw, detr_df_raw, \
-                yolov8_time, detr_time = analyze_image_crowd(image_path_or_url=temp_input_for_analysis)
+                original_img_rgb, yolov11_img_np, detr_img_np, \
+                yolov11_summary, detr_summary, \
+                yolov11_df_raw, detr_df_raw, \
+                yolov11_time, detr_time = analyze_image_crowd(image_path_or_url=temp_input_for_analysis)
 
             if original_img_rgb is not None: # Check if analysis was successful (at least original image loaded)
                 st.markdown("---")
@@ -323,7 +323,7 @@ with st.container():
                 with img_cols[0]:
                     st.image(original_img_rgb, caption="Original Image", use_container_width=True)
                 with img_cols[1]:
-                    st.image(yolov8_img_np if yolov8_img_np is not None else original_img_rgb, caption="YOLOv8 Detections", use_container_width=True)
+                    st.image(yolov11_img_np if yolov11_img_np is not None else original_img_rgb, caption="yolov11 Detections", use_container_width=True)
                 with img_cols[2]:
                     st.image(detr_img_np if detr_img_np is not None else original_img_rgb, caption="DETR Detections", use_container_width=True)
 
@@ -336,31 +336,31 @@ with st.container():
 
                 with comp_table_col:
                     st.subheader("Performance Metrics")
-                    yolov8_summary_data_for_table = {PERSON_LABEL: {'count': yolov8_df_raw.shape[0] if not yolov8_df_raw.empty else 0,
-                                                                   'confidences': yolov8_df_raw['score'].tolist() if not yolov8_df_raw.empty else [],
-                                                                   'true': yolov8_df_raw[yolov8_df_raw['valid'] == True].shape[0] if not yolov8_df_raw.empty else 0,
-                                                                   'false': yolov8_df_raw[yolov8_df_raw['valid'] == False].shape[0] if not yolov8_df_raw.empty else 0}}
+                    yolov11_summary_data_for_table = {PERSON_LABEL: {'count': yolov11_df_raw.shape[0] if not yolov11_df_raw.empty else 0,
+                                                                   'confidences': yolov11_df_raw['score'].tolist() if not yolov11_df_raw.empty else [],
+                                                                   'true': yolov11_df_raw[yolov11_df_raw['valid'] == True].shape[0] if not yolov11_df_raw.empty else 0,
+                                                                   'false': yolov11_df_raw[yolov11_df_raw['valid'] == False].shape[0] if not yolov11_df_raw.empty else 0}}
 
                     detr_summary_data_for_table = {PERSON_LABEL: {'count': detr_df_raw.shape[0] if not detr_df_raw.empty else 0,
                                                                    'confidences': detr_df_raw['score'].tolist() if not detr_df_raw.empty else [],
                                                                    'true': detr_df_raw[detr_df_raw['valid'] == True].shape[0] if not detr_df_raw.empty else 0,
                                                                    'false': detr_df_raw[detr_df_raw['valid'] == False].shape[0] if not detr_df_raw.empty else 0}}
 
-                    comparison_table = create_comparison_table(yolov8_summary_data_for_table, detr_summary_data_for_table, yolov8_time, detr_time)
+                    comparison_table = create_comparison_table(yolov11_summary_data_for_table, detr_summary_data_for_table, yolov11_time, detr_time)
                     st.dataframe(comparison_table, hide_index=True)
 
                 with detailed_summary_col:
                     st.subheader("Detailed Summaries")
                     # Use st.text for pre-formatted output and st.markdown for summaries
-                    st.text("YOLOv8 (Ultralytics) Summary:")
-                    st.markdown(yolov8_summary)
+                    st.text("yolov11 (Ultralytics) Summary:")
+                    st.markdown(yolov11_summary)
                     st.text("DETR (Hugging Face) Summary:")
                     st.markdown(detr_summary)
 
             st.markdown("---")
             st.header("Raw Detections Data")
-            tab1, tab2 = st.tabs(["YOLOv8 Raw Detections", "DETR Raw Detections"])
+            tab1, tab2 = st.tabs(["yolov11 Raw Detections", "DETR Raw Detections"])
             with tab1:
-                st.dataframe(yolov8_df_raw)
+                st.dataframe(yolov11_df_raw)
             with tab2:
                 st.dataframe(detr_df_raw)
